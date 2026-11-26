@@ -5,6 +5,7 @@ Summary:        Personal Qt Quick calendar and event planner
 License:        GPL-3.0-only
 Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  cmake
+BuildRequires:  cmake-rpm-macros
 BuildRequires:  gcc-c++
 BuildRequires:  ninja-build
 BuildRequires:  qt6-qtbase-devel >= 6.8
