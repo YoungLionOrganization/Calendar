@@ -1,0 +1,80 @@
+      - name: Prepare source archive and packaging recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ALPINE_VERSION" in 3.22|3.23|3.24|edge) ;; *) exit 1 ;; esac
+          version=$(sed -nE 's/^project\(CalendarApp VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p' CMakeLists.txt)
+          test -n "$version"
+          test "$(sed -n 's/^pkgver=//p' packaging/alpine/APKBUILD)" = "$version"
+          mkdir -p work dist
+          git archive --format=tar.gz --prefix="younglion-calendar-$version/" \
+            -o "work/younglion-calendar-$version.tar.gz" HEAD
+          cp packaging/alpine/APKBUILD work/
+          printf 'version=%s\ncommit=%s\nalpine=%s\narchitecture=aarch64\n' \
+            "$version" "$GITHUB_SHA" "$ALPINE_VERSION" > dist/BUILD-INFO.txt
+
+      - name: Build, test, sign and inspect Alpine package
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --platform linux/arm64 \
+            -e ALPINE_VERSION -v "$PWD/work:/work" -v "$PWD/dist:/dist" \
+            "alpine:$ALPINE_VERSION" sh -eu <<'ALPINE'
+          test "$(apk --print-arch)" = aarch64
+          if [ "$ALPINE_VERSION" = edge ]; then branch=edge; else branch="v$ALPINE_VERSION"; fi
+          printf '%s\n' \
+            "https://dl-cdn.alpinelinux.org/alpine/$branch/main" \
+            "https://dl-cdn.alpinelinux.org/alpine/$branch/community" > /etc/apk/repositories
+          apk update
+          apk add alpine-sdk cmake ninja qt6-qtbase-dev qt6-qtdeclarative-dev \
+            qt6-qtbase-sqlite qt6-qtdeclarative qt6-qtsvg libical-dev tzdata binutils
+
+          # Qt moved the Wayland platform plugin between packages.
+          case "$ALPINE_VERSION" in
+            3.22) wayland=qt6-qtwayland ;;
+            3.23) wayland=qt6-qtbase-x11 ;;
+            *) wayland=qt6-qtbase-wayland ;;
+          esac
+          apk add "$wayland"
+          test -n "$(find /usr/lib/qt6/plugins/platforms -name 'libqwayland*.so' -print -quit)"
+
+          cd /work
+          # Amend the copied recipe, without modifying the checked-out repository.
+          printf '\ndepends="$depends %s tzdata"\n' "$wayland" >> APKBUILD
+          if ! grep -q '^url=' APKBUILD; then
+            printf '\nurl="https://github.com/YoungLionOrganization/Calendar"\n' >> APKBUILD
+          fi
+          # Use only two jobs to keep memory use predictable.
+          adduser -D builder
+          addgroup builder abuild
+          chown -R builder:builder /work
+          su builder -c 'abuild-keygen -a -n'
+          set -- /home/builder/.abuild/*.rsa.pub
+          test "$#" -eq 1
+          test -f "$1"
+          cp "$1" /etc/apk/keys/
+          cp "$1" /dist/
+
+          su builder -c 'cd /work && abuild checksum && CMAKE_BUILD_PARALLEL_LEVEL=2 abuild'
+          package=$(find /home/builder/packages -type f -name 'younglion-calendar-*.apk' -print -quit)
+          test -n "$package"
+          test -s "$package"
+          apk add "$package"
+          apk info -e younglion-calendar
+          readelf -h /usr/bin/CalendarApp | grep -E 'Machine:.*AArch64'
+          test -f /usr/share/applications/xyz.younglion.Calendar.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/xyz.younglion.Calendar.svg
+          name=$(basename "$package" .apk)
+          cp "$package" "/dist/$name-nuraos-alpine-$ALPINE_VERSION-aarch64.apk"
+          apk info -v qt6-qtbase qt6-qtdeclarative >> /dist/BUILD-INFO.txt
+          ALPINE
+          (cd dist && sha256sum -- *.apk *.rsa.pub BUILD-INFO.txt > SHA256SUMS && sha256sum -c SHA256SUMS)
+
+      - name: Upload NuraOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuraos-alpine-${{ inputs.alpine_version }}-aarch64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
