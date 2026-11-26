@@ -1,0 +1,7 @@
+# YoungLion Calendar
+# SPDX-License-Identifier: GPL-3.0-only
+
+module Calendar
+singleton Constants 1.0 Constants.qml
+EventListSimulator 1.0 EventListSimulator.qml
+EventListModel 1.0 EventListModel.qml

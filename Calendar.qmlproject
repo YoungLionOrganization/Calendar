@@ -1,0 +1,49 @@
+// YoungLion Calendar
+// SPDX-License-Identifier: GPL-3.0-only
+
+import QmlProject
+
+Project {
+    mainFile: "CalendarContent/App.qml"
+    mainUiFile: "CalendarContent/Screen01.ui.qml"
+    importPaths: ["."]
+    qt6Project: true
+    qdsVersion: "4.8"
+    quickVersion: "6.8"
+    widgetApp: true
+    standaloneApp: true
+    targetDirectory: "/opt/Calendar"
+
+    // The checked-in CMake files also support building with a desktop Qt kit.
+    enableCMakeGeneration: false
+
+    QmlFiles {
+        directory: "Calendar"
+    }
+    QmlFiles {
+        directory: "CalendarContent"
+        recursive: true
+    }
+    JavaScriptFiles {
+        filter: "*.js;*.mjs"
+        directory: "CalendarContent"
+        recursive: true
+    }
+    ImageFiles {
+        directory: "assets"
+        recursive: true
+    }
+    ImageFiles {
+        directory: "CalendarContent"
+        recursive: true
+    }
+    FontFiles {
+        directory: "CalendarContent/fonts"
+    }
+    Files {
+        files: ["Calendar/qmldir", "Calendar/designer/plugin.metainfo", "qtquickcontrols2.conf"]
+    }
+    Environment {
+        QT_QUICK_CONTROLS_CONF: "qtquickcontrols2.conf"
+    }
+}

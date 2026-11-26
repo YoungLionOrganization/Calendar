@@ -1,0 +1,20 @@
+pkgname=younglion-calendar
+pkgver=0.2.0
+pkgrel=0
+pkgdesc="Personal Qt Quick calendar and event planner"
+arch="x86_64 aarch64"
+license="GPL-3.0-only"
+depends="qt6-qtbase-sqlite qt6-qtdeclarative qt6-qtsvg"
+makedepends="cmake ninja qt6-qtbase-dev qt6-qtdeclarative-dev libical-dev"
+source="$pkgname-$pkgver.tar.gz"
+
+build() {
+    cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build
+}
+check() {
+    ctest --test-dir build --output-on-failure
+}
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+}

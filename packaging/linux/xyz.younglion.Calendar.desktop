@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=YoungLion Calendar
+Comment=Plan events and manage calendars
+Comment[tr]=Etkinlikleri planla ve takvimleri yönet
+Comment[az]=Tədbirləri planlaşdır və təqvimləri idarə et
+Exec=CalendarApp %f
+Icon=xyz.younglion.Calendar
+Terminal=false
+Categories=Office;Calendar;
+MimeType=text/calendar;
+StartupWMClass=xyz.younglion.Calendar

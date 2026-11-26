@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>xyz.younglion.Calendar</id>
+  <name>YoungLion Calendar</name>
+  <developer id="xyz.younglion"><name>YoungLion Calendar contributors</name></developer>
+  <summary>Personal calendar and event planner</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <url type="homepage">https://younglion.xyz/</url>
+  <description>
+    <p>Plan your schedule in year, month, week and agenda views. Create repeating events, set reminders, and exchange calendars as iCalendar files. Your local calendar works offline.</p>
+  </description>
+  <launchable type="desktop-id">xyz.younglion.Calendar.desktop</launchable>
+  <provides><mediatype>text/calendar</mediatype></provides>
+  <releases><release version="0.2.0" date="2026-11-26"/></releases>
+  <content_rating type="oars-1.1"/>
+</component>

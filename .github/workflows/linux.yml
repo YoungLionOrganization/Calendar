@@ -1,0 +1,43 @@
+name: Linux build and smoke tests
+on: [push, pull_request]
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: archlinux:base-devel
+            packages: pacman -Syu --noconfirm cmake ninja qt6-base qt6-declarative qt6-svg libical desktop-file-utils
+          - image: debian:13
+            packages: apt-get update && apt-get install -y --no-install-recommends ca-certificates g++ cmake ninja-build qt6-base-dev qt6-declarative-dev qt6-declarative-dev-tools libical-dev libqt6sql6-sqlite qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-dialogs qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtcore qml6-module-qtqml qml6-module-qtqml-models qml6-module-qtqml-workerscript qt6-svg-plugins desktop-file-utils
+          - image: ubuntu:26.04
+            packages: apt-get update && apt-get install -y --no-install-recommends ca-certificates g++ cmake ninja-build qt6-base-dev qt6-declarative-dev qt6-declarative-dev-tools libical-dev libqt6sql6-sqlite qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-dialogs qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtcore qml6-module-qtqml qml6-module-qtqml-models qml6-module-qtqml-workerscript qt6-svg-plugins desktop-file-utils
+          - image: fedora:44
+            packages: dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel qt6-qtdeclarative-devel libical-devel qt6-qtbase-sqlite qt6-qtsvg desktop-file-utils
+          - image: alpine:3.23
+            packages: apk add --no-cache build-base cmake ninja qt6-qtbase-dev qt6-qtbase-sqlite qt6-qtdeclarative-dev qt6-qtsvg libical-dev desktop-file-utils
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test in distribution image
+        env:
+          INSTALL: ${{ matrix.packages }}
+          DISTRO: ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -e INSTALL "$DISTRO" sh -eu -c '
+            sh -eu -c "$INSTALL"
+            cmake -S /src -B /tmp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+            cmake --build /tmp/build --parallel 2
+            ctest --test-dir /tmp/build --output-on-failure
+            DESTDIR=/tmp/install cmake --install /tmp/build
+            desktop-file-validate /tmp/install/usr/share/applications/*.desktop
+            export XDG_CONFIG_HOME=/tmp/calendar-config XDG_DATA_HOME=/tmp/calendar-data
+            export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software
+            /tmp/install/usr/bin/CalendarApp >/tmp/start.log 2>&1 &
+            app=$!
+            trap "kill $app 2>/dev/null || true" EXIT
+            sleep 4
+            cat /tmp/start.log
+            kill -0 "$app"
+            ! grep -E "ReferenceError|RangeError|TypeError|Cannot open the calendar projection" /tmp/start.log
+          '
