@@ -10,7 +10,7 @@ BuildRequires:  ninja-build
 BuildRequires:  qt6-qtbase-devel >= 6.8
 BuildRequires:  qt6-qtdeclarative-devel
 BuildRequires:  libical-devel
-Requires:       qt6-qtbase-sqlite
+Requires:       qt6-qtbase
 Requires:       qt6-qtdeclarative
 Requires:       qt6-qtsvg
 

@@ -1,5 +1,9 @@
 name: Linux build and smoke tests
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 jobs:
   build:
     strategy:
@@ -13,12 +17,12 @@ jobs:
           - image: ubuntu:26.04
             packages: apt-get update && apt-get install -y --no-install-recommends ca-certificates g++ cmake ninja-build qt6-base-dev qt6-declarative-dev qt6-declarative-dev-tools libical-dev libqt6sql6-sqlite qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-dialogs qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtcore qml6-module-qtqml qml6-module-qtqml-models qml6-module-qtqml-workerscript qt6-svg-plugins desktop-file-utils
           - image: fedora:44
-            packages: dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel qt6-qtdeclarative-devel libical-devel qt6-qtbase-sqlite qt6-qtsvg desktop-file-utils
+            packages: dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel qt6-qtdeclarative-devel libical-devel qt6-qtbase qt6-qtsvg desktop-file-utils
           - image: alpine:3.23
             packages: apk add --no-cache build-base cmake ninja qt6-qtbase-dev qt6-qtbase-sqlite qt6-qtdeclarative-dev qt6-qtsvg libical-dev desktop-file-utils
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build and test in distribution image
         env:
           INSTALL: ${{ matrix.packages }}

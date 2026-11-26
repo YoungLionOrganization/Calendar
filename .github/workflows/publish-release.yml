@@ -1,0 +1,111 @@
+name: Publish Release
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Validate a release candidate or publish it
+        type: choice
+        required: true
+        default: validate
+        options: [validate, publish]
+      build_run_id:
+        description: Successful Build Release Artifacts run ID
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: calendar-publish-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate release candidate
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.candidate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify source, build run and Linux CI
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.build_run_id }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)" = "$GITHUB_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" | jq -e --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            .path == ".github/workflows/build-artifacts.yml" and .event == "workflow_dispatch"
+            and .conclusion == "success" and .head_branch == "main" and .head_sha == $sha
+            and .head_repository.full_name == $repo
+          '
+          gh run list --workflow linux.yml --branch main --commit "$GITHUB_SHA" --event push \
+            --json conclusion --limit 1 | jq -e '.[0].conclusion == "success"'
+          version=$(sed -nE 's/^project\(CalendarApp VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p' CMakeLists.txt)
+          test -n "$version"
+          test -s "docs/releases/v$version.md"
+          if [[ "$MODE" == publish ]] && git ls-remote --exit-code origin "refs/tags/v$version"; then
+            echo "Tag v$version already exists. Choose a new version before publishing." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Download and verify artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.build_run_id }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+        run: |
+          gh run download "$RUN_ID" --name release-linux --dir dist
+          android_artifact=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '[.artifacts[] | select(.name == "release-android" and (.expired | not))] | length')
+          if [[ "$android_artifact" == 1 ]]; then
+            gh run download "$RUN_ID" --name release-android --dir dist
+          fi
+          source="dist/younglion-calendar-$VERSION.tar.gz"
+          test -s "$source"
+          git archive --format=tar.gz --prefix="younglion-calendar-$VERSION/" HEAD > expected.tar.gz
+          cmp expected.tar.gz "$source"
+          shopt -s nullglob
+          packages=(dist/younglion-calendar-"$VERSION"-*-x86_64.pkg.tar.zst)
+          [[ ${#packages[@]} == 1 ]]
+          test -s "${packages[0]}"
+          if [[ "$android_artifact" == 1 ]]; then
+            test -s "dist/younglion-calendar-$VERSION-android-arm64.apk"
+          fi
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq "$((2 + android_artifact))"
+          (cd dist && sha256sum -- * > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        if: inputs.mode == 'publish'
+        with:
+          name: validated-release
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish validated release
+    if: inputs.mode == 'publish'
+    needs: preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: validated-release
+          path: dist
+      - name: Publish after all uploads complete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)" = "$GITHUB_SHA"
+          (cd dist && sha256sum -c SHA256SUMS)
+          tag="v$VERSION"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "YoungLion Calendar $VERSION" \
+            --draft --notes-file "docs/releases/$tag.md" dist/*
+          gh release edit "$tag" --draft=false --latest

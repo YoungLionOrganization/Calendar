@@ -1,0 +1,125 @@
+name: Build Release Artifacts
+on:
+  workflow_dispatch:
+    inputs:
+      android:
+        description: Build a signed Android arm64 APK using repository signing secrets
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: '6.10.2'
+  NDK_VERSION: '27.2.12479018'
+
+jobs:
+  source:
+    name: Source and Arch package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Archive the checked-out commit
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          version=$(sed -nE 's/^project\(CalendarApp VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p' CMakeLists.txt)
+          test -n "$version"
+          test "$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)" = "$version"
+          mkdir -p dist work
+          git archive --format=tar.gz --prefix="younglion-calendar-$version/" -o "dist/younglion-calendar-$version.tar.gz" HEAD
+          cp packaging/arch/PKGBUILD dist/*.tar.gz work/
+      - name: Build and inspect the native Arch package
+        run: |
+          docker run --rm -v "$PWD/work:/work" archlinux:base-devel bash -euc '
+            pacman -Syu --noconfirm cmake ninja qt6-base qt6-declarative qt6-svg libical
+            useradd -m builder
+            chown -R builder:builder /work
+            cd /work
+            runuser -u builder -- env CMAKE_BUILD_PARALLEL_LEVEL=2 makepkg --noconfirm --noprogressbar
+            bsdtar -tf ./*.pkg.tar.zst > files.txt
+            grep -Fx usr/bin/CalendarApp files.txt
+          '
+          cp work/*.pkg.tar.zst dist/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: dist/
+          if-no-files-found: error
+
+  android:
+    name: Signed Android arm64 APK
+    if: inputs.android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check signing configuration
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          if [[ -z "$KEYSTORE" || -z "$KEY_ALIAS" || -z "$STORE_PASSWORD" || -z "$KEY_PASSWORD" ]]; then
+            echo 'Configure all four ANDROID signing secrets before requesting an APK.' >&2
+            exit 1
+          fi
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' "ndk;$NDK_VERSION"
+      - uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: all_os
+          target: android
+          arch: android_arm64_v8a
+          aqtversion: '==3.3.*'
+          cache: true
+      - name: Cross-build libical and Calendar
+        run: |
+          export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
+          curl --fail --location --retry 3 https://codeload.github.com/libical/libical/tar.gz/refs/tags/v3.0.20 -o libical.tar.gz
+          echo 'e73de92f5a6ce84c1b00306446b290a2b08cdf0a80988eca0a2c9d5c3510b4c2  libical.tar.gz' | sha256sum -c
+          tar -xf libical.tar.gz
+          cmake -S libical-3.0.20 -B build-libical -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DSTATIC_ONLY=ON -DICAL_GLIB=OFF \
+            -DICAL_BUILD_DOCS=OFF -DLIBICAL_BUILD_TESTING=OFF -DWITH_CXX_BINDINGS=OFF \
+            -DUSE_BUILTIN_TZDATA=ON -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/libical"
+          cmake --build build-libical --parallel 2
+          cmake --install build-libical
+          ical_config=$(find "$RUNNER_TEMP/libical" -name LibIcalConfig.cmake -print -quit)
+          test -f "$ical_config"
+          "$QT_ROOT_DIR/bin/qt-cmake" -S . -B build-android -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DANDROID_ABI=arm64-v8a \
+            -DLibIcal_DIR="$(dirname "$ical_config")"
+          cmake --build build-android --target apk --parallel 2
+      - name: Sign and verify APK
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          version=$(sed -nE 's/^project\(CalendarApp VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p' CMakeLists.txt)
+          test -n "$version"
+          unsigned=$(find build-android/android-build -name '*-release-unsigned.apk' -print -quit)
+          test -f "$unsigned"
+          key=$(mktemp "$RUNNER_TEMP/calendar-key.XXXXXX")
+          trap 'rm -- "$key"' EXIT
+          printf '%s' "$KEYSTORE" | base64 --decode > "$key"
+          mkdir -p dist
+          apk="dist/younglion-calendar-$version-android-arm64.apk"
+          signer="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
+          "$signer" sign --ks "$key" --ks-key-alias "$KEY_ALIAS" --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD --v4-signing-enabled false --out "$apk" "$unsigned"
+          "$signer" verify "$apk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-android
+          path: dist/*.apk
+          if-no-files-found: error
